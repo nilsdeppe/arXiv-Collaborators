@@ -844,7 +844,8 @@ def print_authors(author,
             elif coauthor['affiliation'] is not None:
                 to_print += f'\t{coauthor["affiliation"]["name"]}'
             else:
-                print(f"Could find an affiliation for {coauthor['name']}", file=sys.stderr)
+                to_print += '\t'
+                print(f"Could not find an affiliation for {coauthor['name']}", file=sys.stderr)
             to_print += f'\t\t{month}/{day}/{year}'
             print(to_print)
 
