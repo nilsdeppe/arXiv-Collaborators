@@ -282,6 +282,10 @@ class Author:
     # than guessed from the raw affiliation string.
     curated: bool = False
     source: str = ''
+    # INSPIRE author profile record ID and ORCID, used as fallbacks for
+    # affiliations
+    inspire_id: str = ''
+    orcid: str = ''
 
 
 @dataclass
@@ -599,7 +603,115 @@ def inspire_author(author, institutions):
     return Author(name=last_first_to_first_last(author['full_name']),
                   affiliations=unique(affiliations),
                   curated=curated and bool(affiliations),
-                  source='inspire')
+                  source='inspire',
+                  inspire_id=author.get('record', {}).get('$ref',
+                                                          '').split('/')[-1],
+                  orcid=next((i['value'] for i in author.get('ids', [])
+                              if i.get('schema') == 'ORCID'), ''))
+
+
+def fetch_inspire_recent_affiliation(author_id, last_name):
+    """Affiliation of an INSPIRE author on their most recent paper (by
+    anyone, not just with the PI) that lists one.
+
+    Entries whose last name doesn't match `last_name` (as in `name_key`) are
+    ignored, since INSPIRE occasionally links an author to the wrong profile.
+
+    Returns (Author, date, link) or None.
+    """
+    hits = get_json(
+        'https://inspirehep.net/api/literature', {
+            'q': f'authors.recid:{author_id}',
+            'fields': 'control_number,earliest_date,authors.record,'
+            'authors.full_name,authors.affiliations,authors.raw_affiliations',
+            'size': 10,
+            'sort': 'mostrecent',
+        })['hits']['hits']
+    entries = []
+    for hit in hits:
+        for author in hit['metadata'].get('authors', []):
+            if author.get('record', {}).get('$ref',
+                                             '').split('/')[-1] == author_id:
+                entries.append((hit['metadata'], author))
+    institutions = fetch_inspire_institutions({
+        affiliation['record']['$ref'].split('/')[-1]
+        for _, author in entries
+        for affiliation in author.get('affiliations', [])
+        if 'record' in affiliation
+    })
+    for metadata, author in entries:
+        paper_author = inspire_author(author, institutions)
+        if name_key(paper_author.name).split()[-1] != last_name:
+            continue
+        if paper_author.affiliations:
+            return (paper_author, parse_date(metadata['earliest_date']),
+                    'https://inspirehep.net/literature/' +
+                    str(metadata['control_number']))
+    return None
+
+
+def fetch_orcid_employment(orcid):
+    """Current employers listed on a public ORCID record, most recent first."""
+    try:
+        result = get_json(f'https://pub.orcid.org/v3.0/{orcid}/employments',
+                          {}, headers={'Accept': 'application/json'})
+    except urllib.error.HTTPError:
+        return []
+    current = []
+    for group in result.get('affiliation-group', []):
+        for summary in group.get('summaries', []):
+            employment = summary.get('employment-summary', {})
+            if employment.get('end-date'):
+                continue
+            start = employment.get('start-date') or {}
+            start = tuple(
+                int((start.get(part) or {}).get('value') or 0)
+                for part in ('year', 'month', 'day'))
+            current.append((start, employment['organization']['name']))
+    return unique([name for _, name in sorted(current, reverse=True)])
+
+
+def fetch_inspire_profile_affiliations(author_ids):
+    """Map INSPIRE author profile IDs to their current institutions.
+
+    Used for coauthors whose paper records have no affiliation (e.g. some
+    entries of large collaboration author lists). The profile is linked from
+    the paper, so there is no ambiguity about who the person is.
+    """
+    author_ids = sorted(author_ids)
+    positions = {}
+    chunk_size = 100
+    for i in range(0, len(author_ids), chunk_size):
+        chunk = author_ids[i:i + chunk_size]
+        hits = get_json(
+            'https://inspirehep.net/api/authors', {
+                'q': f'control_number:({" OR ".join(chunk)})',
+                'fields': 'control_number,positions',
+                'size': chunk_size,
+            })['hits']['hits']
+        for hit in hits:
+            metadata = hit['metadata']
+            current = [
+                p for p in metadata.get('positions', []) if p.get('current')
+            ]
+            if current:
+                positions[str(metadata['control_number'])] = current
+    institutions = fetch_inspire_institutions({
+        p['record']['$ref'].split('/')[-1]
+        for current in positions.values() for p in current if 'record' in p
+    })
+    result = {}
+    for author_id, current in positions.items():
+        names = []
+        for position in current:
+            institution_id = position.get('record', {}).get('$ref',
+                                                            '').split('/')[-1]
+            names.append(
+                institutions.get(institution_id, position.get('institution')))
+        names = unique([n for n in names if n])
+        if names:
+            result[author_id] = names
+    return result
 
 
 def fetch_inspire(bai, min_year):
@@ -611,6 +723,7 @@ def fetch_inspire(bai, min_year):
             url, {
                 'q': f'a {bai} and de > {min_year - 1}',
                 'fields': 'control_number,titles.title,authors.full_name,'
+                'authors.record,authors.ids,'
                 'authors.affiliations,authors.raw_affiliations,'
                 'arxiv_eprints.value,dois.value,earliest_date,document_type',
                 'size': 250,
@@ -765,6 +878,8 @@ def print_authors(author,
                 'link': None,
                 'names': set(),
                 'affiliation': None,
+                'inspire_ids': set(),
+                'orcids': set(),
             })
             coauthor['count'] += 1
             coauthor['names'] |= {name for name, _ in paper_authors}
@@ -775,6 +890,10 @@ def print_authors(author,
             # preferring ones matched to an institution database, and ADS
             # over INSPIRE.
             for _, paper_author in paper_authors:
+                if paper_author.inspire_id:
+                    coauthor['inspire_ids'].add(paper_author.inspire_id)
+                if paper_author.orcid:
+                    coauthor['orcids'].add(paper_author.orcid)
                 if not paper_author.affiliations:
                     continue
                 candidate = {
@@ -788,6 +907,62 @@ def print_authors(author,
                 if (coauthor['affiliation'] is None
                         or candidate['rank'] > coauthor['affiliation']['rank']):
                     coauthor['affiliation'] = candidate
+
+    # For coauthors whose records with the PI have no affiliation (e.g. some
+    # entries of large collaboration author lists), use the affiliation on
+    # their most recent paper linked to the same INSPIRE profile.
+    no_affiliation = [
+        (key, c) for key, c in coauthors.items()
+        if c['affiliation'] is None and c['names'].isdisjoint(affiliations)
+    ]
+    for key, coauthor in no_affiliation:
+        for author_id in sorted(coauthor['inspire_ids']):
+            recent = fetch_inspire_recent_affiliation(author_id,
+                                                      key.split()[-1])
+            if recent:
+                paper_author, date, link = recent
+                coauthor['affiliation'] = {
+                    'rank': (date, paper_author.curated, False),
+                    'name': ' & '.join(paper_author.affiliations),
+                    'curated': paper_author.curated,
+                    'source': 'inspire, other paper',
+                    'link': link,
+                }
+                break
+
+    # Otherwise fall back to the current position on their INSPIRE profile
+    no_affiliation = [c for _, c in no_affiliation if c['affiliation'] is None]
+    if any(c['inspire_ids'] for c in no_affiliation):
+        profiles = fetch_inspire_profile_affiliations(
+            set().union(*(c['inspire_ids'] for c in no_affiliation)))
+        for coauthor in no_affiliation:
+            for author_id in sorted(coauthor['inspire_ids']):
+                if author_id in profiles:
+                    coauthor['affiliation'] = {
+                        'rank': ((0, 0, 0), True, False),
+                        'name': ' & '.join(profiles[author_id]),
+                        'curated': True,
+                        'source': 'inspire profile',
+                        'link': 'https://inspirehep.net/authors/' + author_id,
+                    }
+                    break
+
+    # Finally, try the current employer on the coauthor's ORCID record (as
+    # linked from a paper's INSPIRE record).
+    for coauthor in no_affiliation:
+        if coauthor['affiliation'] is not None:
+            continue
+        for orcid in sorted(coauthor['orcids']):
+            employers = fetch_orcid_employment(orcid)
+            if employers:
+                coauthor['affiliation'] = {
+                    'rank': ((0, 0, 0), True, False),
+                    'name': ' & '.join(employers),
+                    'curated': True,
+                    'source': 'ORCID employment',
+                    'link': 'https://orcid.org/' + orcid,
+                }
+                break
 
     for coauthor in coauthors.values():
         # Prefer a spelling we have an affiliation for, otherwise the most
@@ -825,7 +1000,8 @@ def print_authors(author,
         year, month, _ = affiliation['rank'][0]
         how = ('' if affiliation['curated'] else
                ', guessed from raw affiliation string')
-        return (f'[{affiliation["source"]} {year}-{month:02}{how}] '
+        when = (f' {year}-{month:02}' if year else ', current position')
+        return (f'[{affiliation["source"]}{when}{how}] '
                 f'{affiliation["link"]}')
 
     from_papers = [

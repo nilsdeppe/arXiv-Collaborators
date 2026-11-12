@@ -32,7 +32,9 @@ This additionally queries ADS/SciX (by ORCID, requires `ADS_TOKEN`) and
 INSPIRE-HEP (by INSPIRE author ID, looked up from the ORCID or passed with
 `--inspire-bai`). Use `--no-ads` or `--no-inspire` to skip a source, or
 `--ads`/`--inspire` to make it an error if a source can't be queried (e.g.
-`ADS_TOKEN` is not set) instead of just a warning. Papers are matched across sources by arXiv ID, DOI, or title
+`ADS_TOKEN` is not set) instead of just a warning. If your INSPIRE profile
+doesn't list your ORCID, the lookup fails with a warning and you need to pass
+`--inspire-bai` (e.g. `L.E.Kidder.1`) yourself. Papers are matched across sources by arXiv ID, DOI, or title
 so each coauthor is counted once per paper. Records found only in ADS/SciX or
 INSPIRE, and coauthor names that look like duplicates, are printed to stderr for
 review.
@@ -47,6 +49,14 @@ sometimes list people at a past institution (e.g. large catalog papers list
 where the work was done), so the `affiliations` dictionary always takes
 precedence. Pass `--check-affiliations` to compare every entry in the
 dictionary against the most recent paper, which helps find stale entries.
+
+If none of the coauthor's records with you list an affiliation (this happens
+for some entries of large collaboration author lists), the script follows the
+INSPIRE author profile linked from the paper and uses, in order: the
+affiliation on their most recent INSPIRE paper with anyone (skipped if the
+name on that paper doesn't match, since INSPIRE occasionally links the wrong
+profile), the current position on their INSPIRE profile, and the current
+employer on their public ORCID record. These are printed to stderr too.
 
 In the script there are two dictionaries. `remapped_names` is for dealing with
 authors who have multiple names on the arxiv. `affiliations` is for associating
