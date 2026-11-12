@@ -15,6 +15,8 @@ from enum import Enum
 import feedparser as fp
 
 remapped_names = {
+    # INSPIRE mangles "Vallejo-Pe\\~na" on the GW230814 LVK paper
+    "A}O": "S.A. Vallejo-Peña",
     "Béla Szilágyi": "Bela Szilagyi",
     "Cristóbal Armaza": "Cristobal Armaza",
     "Daniel A. Hemberger": "Daniel Hemberger",
@@ -42,12 +44,14 @@ affiliations = {
     "Alessandro Nagar": "INFN Sezione di Torino",
     "Alexander Carpenter": "Cal State Fullerton",
     "Alexander Chernoglazov": "University of Maryland",
+    "Alexander M. Grant": "University of Southampton",
     "Alexandra Macedo": "Cal State Fullerton",
     "Alyssa Garcia": "Cal State Fullerton",
     "Andrea Ceja": "Cal State Fullerton",
     "Andrew R. Frey": "University of Winnipeg",
     "Aniket Khairnar": "University of Mississippi",
     "Anıl Zenginoğlu": "University of Maryland",
+    "Antony J. Speranza": "University of Amsterdam",
     "Antoni Ramos-Buades": "University of the Balearic Islands",
     "Arnab Dhani": "Penn State University",
     "Azer Afram": "Cal State Fullerton",
@@ -100,6 +104,7 @@ affiliations = {
     "Jordan Moxon": "Caltech",
     "Justin L. Ripley": "Johns Hopkins University",
     "Károly Zoltán Csukás": " Magyar Tudományos Akadémia Wigner Fizikai Kutatóközpont Részecske-és Magfizikai Intézet",
+    "Kartik Prabhu": "Raman Research Institute, Bengaluru, India",
     "Katerina Chatziioannou": "Caltech",
     "Katie Rink": "UT Austin",
     "Keefe Mitman": "Caltech",
@@ -153,6 +158,7 @@ affiliations = {
     "Qingwen Wang": "Perimeter Institute",
     "Reza Katebi": "Cal State Fullerton",
     "Robert Owen": "Oberlin College",
+    "S.A. Vallejo-Peña": "Universidad de Antioquia",
     "Samuel Rodriguez": "Cal State Fullerton",
     "Sarah Habib": "Caltech",
     "Saul A. Teukolsky": "Cornell University",
