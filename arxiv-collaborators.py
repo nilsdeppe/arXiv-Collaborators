@@ -5,6 +5,7 @@ import os
 import re
 import sys
 import unicodedata
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
@@ -512,15 +513,42 @@ def fetch_inspire_institutions(institution_ids):
             'https://inspirehep.net/api/institutions', {
                 'q': f'control_number:({" OR ".join(chunk)})',
                 'fields': 'control_number,institution_hierarchy,legacy_ICN,'
-                'addresses.cities',
+                'addresses.cities,external_system_identifiers',
                 'size': chunk_size,
             })['hits']['hits']
         for hit in hits:
             metadata = hit['metadata']
-            name = inspire_institution_name(metadata)
+            # Without a usable hierarchy, prefer the ROR name ('University of
+            # Wisconsin–Milwaukee') over the INSPIRE short name ('Wisconsin
+            # U., Milwaukee').
+            name = (inspire_institution_name(metadata) or ror_name(metadata)
+                    or metadata.get('legacy_ICN'))
             if name:
                 names[str(metadata['control_number'])] = name
     return names
+
+
+ror_names = {}
+
+
+def ror_name(metadata):
+    """Display name of an INSPIRE institution from its ROR record, if any."""
+    for identifier in metadata.get('external_system_identifiers', []):
+        if identifier.get('schema') != 'ROR':
+            continue
+        ror_id = identifier['value'].rstrip('/').split('/')[-1]
+        if ror_id not in ror_names:
+            try:
+                record = get_json(
+                    f'https://api.ror.org/v2/organizations/{ror_id}', {})
+                ror_names[ror_id] = next(
+                    (n['value'] for n in record.get('names', [])
+                     if 'ror_display' in n.get('types', [])), None)
+            except (urllib.error.URLError, ValueError):
+                ror_names[ror_id] = None
+        if ror_names[ror_id]:
+            return ror_names[ror_id]
+    return None
 
 
 def inspire_institution_name(metadata):
@@ -533,8 +561,10 @@ def inspire_institution_name(metadata):
     but other sub-units (institutes, sections, ...) are kept.
     """
     hierarchy = [h['name'] for h in metadata.get('institution_hierarchy', [])]
-    if not hierarchy:
-        return metadata.get('legacy_ICN')
+    # Some records have a broken hierarchy, e.g. ['Department of Physics',
+    # '903350'] for the University of Wisconsin-Milwaukee
+    if not hierarchy or any(re.fullmatch(r'[\d\s]*', h) for h in hierarchy):
+        return None
     parts = [hierarchy[-1]] + [
         h for h in hierarchy[:-1]
         if not re.match(r'(Dep(t|artment)|Division|School|Faculty|Cent(er|re|ro))\b', h)
@@ -843,6 +873,11 @@ def print_authors(author,
                 to_print += f'\t{affiliations[coauthor["name"]]}'
             elif coauthor['affiliation'] is not None:
                 to_print += f'\t{coauthor["affiliation"]["name"]}'
+                if not all(re.search(r'[^\W\d_]{2}', part) for part in
+                           coauthor['affiliation']['name'].split(' & ')):
+                    print(f'Warning: Affiliation for {coauthor["name"]} looks '
+                          f'broken: {coauthor["affiliation"]["name"]}',
+                          file=sys.stderr)
             else:
                 to_print += '\t'
                 print(f"Could not find an affiliation for {coauthor['name']}", file=sys.stderr)
