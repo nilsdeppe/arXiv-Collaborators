@@ -1,1 +1,4 @@
 venv/
+.DS_STORE
+.python-version
+*undo-tree*
