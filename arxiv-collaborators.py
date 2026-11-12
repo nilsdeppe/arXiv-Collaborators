@@ -301,9 +301,13 @@ class Paper:
     ids: set = field(default_factory=set)
     sources: set = field(default_factory=set)
     doctype: str = ''
+    # Largest author list among the merged records. Not len(authors), since
+    # merged records concatenate the author lists of each source.
+    author_count: int = 0
 
     def __post_init__(self):
         self.sources.add(self.source)
+        self.author_count = max(self.author_count, len(self.authors))
         if self.title:
             self.ids.add('title:' + normalize_title(self.title))
 
@@ -312,6 +316,7 @@ class Paper:
         self.ids |= other.ids
         self.sources |= other.sources
         self.authors = self.authors + other.authors
+        self.author_count = max(self.author_count, other.author_count)
         # Prefer dates and links in the order arXiv > INSPIRE > ADS. The arXiv
         # date matches what the script has always used, INSPIRE dates have a
         # day, and ADS pubdates are journal publication months.
@@ -797,6 +802,7 @@ def print_authors(author,
                   use_ads=True,
                   use_inspire=True,
                   check_affiliations=False,
+                  max_authors=None,
                   show_papers=False,
                   show_skipped=False):
     """Print the coauthors of `author`, combining arXiv, ADS/SciX, and INSPIRE.
@@ -840,6 +846,7 @@ def print_authors(author,
 
     coauthors = {}
     missing_from_arxiv = []
+    too_many_authors = []
     total_papers = len(papers)
     for i, paper in enumerate(
             sorted(papers, key=lambda p: p.date, reverse=True)):
@@ -850,6 +857,10 @@ def print_authors(author,
             if show_skipped:
                 print(f'{i + 1}/{total_papers}: {year_updated} '
                       f'{title}--Skipping ', file=sys.stderr)
+            continue
+
+        if max_authors is not None and paper.author_count > max_authors:
+            too_many_authors.append(paper)
             continue
 
         if show_papers:
@@ -969,6 +980,15 @@ def print_authors(author,
         # complete one (e.g. 'Lawrence E. Kidder' over 'L. Kidder').
         coauthor['name'] = max(coauthor['names'],
                                key=lambda n: (n in affiliations, len(n), n))
+
+    if too_many_authors:
+        print(f'\n{len(too_many_authors)} papers skipped for having more than '
+              f'{max_authors} authors (use --max-authors to change):',
+              file=sys.stderr)
+        for paper in too_many_authors:
+            print(f'  {paper.date[0]}-{paper.date[1]:02} '
+                  f'[{paper.author_count} authors] {paper.title}\n'
+                  f'    {paper.link}', file=sys.stderr)
 
     if missing_from_arxiv:
         print(f'\n{len(missing_from_arxiv)} records found only in ADS/SciX '
@@ -1108,6 +1128,13 @@ if __name__ == '__main__':
         action='store_true',
         help='Compare the `affiliations` dict to the affiliations on each '
         "coauthor's most recent paper (printed to stderr).")
+    parser.add_argument(
+        '--max-authors',
+        type=int,
+        default=0,
+        help='Skip papers with more than this many authors, e.g. large '
+        'collaboration papers. By default all papers are included, since NSF '
+        'asks for all co-authors. Skipped papers are printed to stderr.')
     parser.add_argument('--show-papers',
                         action='store_true',
                         help='Print the papers used (to stderr).')
@@ -1127,4 +1154,5 @@ if __name__ == '__main__':
                   use_ads=args.ads is not False,
                   use_inspire=args.inspire is not False,
                   check_affiliations=args.check_affiliations,
+                  max_authors=args.max_authors or None,
                   show_papers=args.show_papers)

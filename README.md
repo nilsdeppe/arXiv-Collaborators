@@ -58,6 +58,11 @@ name on that paper doesn't match, since INSPIRE occasionally links the wrong
 profile), the current position on their INSPIRE profile, and the current
 employer on their public ORCID record. These are printed to stderr too.
 
+Papers with more than `--max-authors` authors can be skipped, e.g.
+`--max-authors 500` to leave out large collaboration papers. Skipped papers
+are printed to stderr. By default all papers are included, since NSF asks for
+all co-authors from the last 48 months.
+
 In the script there are two dictionaries. `remapped_names` is for dealing with
 authors who have multiple names on the arxiv. `affiliations` is for associating
 people with institutions. These will be dependent on your use-case and could
